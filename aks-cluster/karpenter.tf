@@ -4,7 +4,6 @@
 
 locals {
   nap_common_requirements = [
-    { key = "kubernetes.io/arch", operator = "In", values = ["amd64"] },
     { key = "kubernetes.io/os", operator = "In", values = ["linux"] },
     { key = "karpenter.azure.com/sku-family", operator = "In", values = ["D"] },
     { key = "karpenter.azure.com/sku-cpu", operator = "Lt", values = [tostring(var.nap_max_node_cpu + 1)] },
@@ -20,17 +19,21 @@ locals {
       mode        = "user"
       # NAP prefers spot when both are allowed, falling back to on-demand.
       capacity_types = ["spot", "on-demand"]
-      budget         = "30%"
-      limits         = var.nap_limits.general
-      taints         = []
+      # Workloads aren't multi-arch yet.
+      archs  = ["amd64"]
+      budget = "30%"
+      limits = var.nap_limits.general
+      taints = []
     }
     system-burst = {
       description    = "Surge capacity for system pods when the system pool is full"
       mode           = "system"
       capacity_types = ["on-demand"]
-      budget         = "10%"
-      limits         = var.nap_limits.system_burst
-      taints         = [{ key = "CriticalAddonsOnly", value = "true", effect = "NoSchedule" }]
+      # Matches the arm64 system pool; AKS add-ons are multi-arch.
+      archs  = ["arm64"]
+      budget = "10%"
+      limits = var.nap_limits.system_burst
+      taints = [{ key = "CriticalAddonsOnly", value = "true", effect = "NoSchedule" }]
     }
   }
 }
@@ -75,6 +78,7 @@ resource "kubectl_manifest" "node_pool" {
             nodeClassRef = { group = "karpenter.azure.com", kind = "AKSNodeClass", name = each.key }
             expireAfter  = "Never"
             requirements = concat(local.nap_common_requirements, [
+              { key = "kubernetes.io/arch", operator = "In", values = each.value.archs },
               { key = "karpenter.sh/capacity-type", operator = "In", values = each.value.capacity_types },
             ])
             startupTaints = local.nap_startup_taints

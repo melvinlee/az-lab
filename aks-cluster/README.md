@@ -77,7 +77,7 @@ The AKS default NodePools are turned off (`default_node_pools = "None"`) because
 | `general` | Ordinary workloads (`mode: user`) | 8 vCPU / 16Gi total |
 | `system-burst` | Extra room for system pods when the system node is full (`CriticalAddonsOnly` taint) | 4 vCPU / 16Gi total |
 
-Both use D-series VMs with at most `nap_max_node_cpu` vCPUs each. `general` allows both spot and on-demand, and NAP prefers spot, falling back to on-demand when spot capacity isn't available. `system-burst` stays on-demand only, so system pods aren't evicted when Azure reclaims spot capacity. When a pool reaches its limit, Karpenter stops adding nodes and new pods stay `Pending`. That's intended: it stops a runaway scale-up from running up a bill.
+Both use D-series VMs with at most `nap_max_node_cpu` vCPUs each. `general` allows both spot and on-demand, and NAP prefers spot, falling back to on-demand when spot capacity isn't available. `system-burst` stays on-demand only, so system pods aren't evicted when Azure reclaims spot capacity. `general` is amd64 only because the workloads aren't multi-arch; `system-burst` is arm64 to match the system pool. When a pool reaches its limit, Karpenter stops adding nodes and new pods stay `Pending`. That's intended: it stops a runaway scale-up from running up a bill.
 
 ```sh
 kubectl get nodepools -o custom-columns=NAME:.metadata.name,CPU:.spec.limits.cpu,MEM:.spec.limits.memory,NODES:.status.resources.nodes
