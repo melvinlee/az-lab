@@ -20,20 +20,24 @@ locals {
       # NAP prefers spot when both are allowed, falling back to on-demand.
       capacity_types = ["spot", "on-demand"]
       # Workloads aren't multi-arch yet.
-      archs  = ["amd64"]
-      budget = "30%"
-      limits = var.nap_limits.general
-      taints = []
+      archs = ["amd64"]
+      # Pin to two cheap 4 vCPU / 8 GiB sizes. Smaller in-flight nodes let the 16Gi limit
+      # fit two NodeClaims, and two families give spot more chances to find capacity.
+      sku_names = ["Standard_D4ls_v5", "Standard_D4als_v6"]
+      budget    = "30%"
+      limits    = var.nap_limits.general
+      taints    = []
     }
     system-burst = {
       description    = "Surge capacity for system pods when the system pool is full"
       mode           = "system"
       capacity_types = ["on-demand"]
       # Matches the arm64 system pool; AKS add-ons are multi-arch.
-      archs  = ["arm64"]
-      budget = "10%"
-      limits = var.nap_limits.system_burst
-      taints = [{ key = "CriticalAddonsOnly", value = "true", effect = "NoSchedule" }]
+      archs     = ["arm64"]
+      sku_names = [] # no size pin
+      budget    = "10%"
+      limits    = var.nap_limits.system_burst
+      taints    = [{ key = "CriticalAddonsOnly", value = "true", effect = "NoSchedule" }]
     }
   }
 }
@@ -77,10 +81,16 @@ resource "kubectl_manifest" "node_pool" {
           {
             nodeClassRef = { group = "karpenter.azure.com", kind = "AKSNodeClass", name = each.key }
             expireAfter  = "Never"
-            requirements = concat(local.nap_common_requirements, [
-              { key = "kubernetes.io/arch", operator = "In", values = each.value.archs },
-              { key = "karpenter.sh/capacity-type", operator = "In", values = each.value.capacity_types },
-            ])
+            requirements = concat(
+              local.nap_common_requirements,
+              [
+                { key = "kubernetes.io/arch", operator = "In", values = each.value.archs },
+                { key = "karpenter.sh/capacity-type", operator = "In", values = each.value.capacity_types },
+              ],
+              length(each.value.sku_names) > 0 ? [
+                { key = "karpenter.azure.com/sku-name", operator = "In", values = each.value.sku_names },
+              ] : [],
+            )
             startupTaints = local.nap_startup_taints
           },
           length(each.value.taints) > 0 ? { taints = each.value.taints } : {}
