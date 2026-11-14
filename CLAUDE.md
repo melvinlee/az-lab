@@ -41,4 +41,4 @@ AKS Free tier with node auto-provisioning (NAP, AKS-managed Karpenter). NAP cons
 
 - Azure resources cost money. When creating a lab, include a clear teardown path (e.g. a single resource group per lab that can be deleted).
 - Use the Microsoft Learn MCP tools to look up current Azure documentation and samples instead of relying on memory. For VM size comparisons, the public Azure Retail Prices API (`https://prices.azure.com/api/retail/prices`) gives live per-region on-demand and spot prices.
-- Commit messages: no `Co-Authored-By` trailer.
+- No Claude attribution: no `Co-Authored-By` trailer in commits and no "Generated with Claude Code" line in commits, PRs, or issues.
