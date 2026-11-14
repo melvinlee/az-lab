@@ -23,9 +23,9 @@ variable "kubernetes_version" {
 }
 
 variable "system_node_vm_size" {
-  description = "VM size for the system node pool (Karpenter/NAP provisions the workload nodes)."
+  description = "VM size for the system node pool (arm64 Cobalt 100; Karpenter/NAP provisions the workload nodes)."
   type        = string
-  default     = "Standard_D2s_v5"
+  default     = "Standard_D2ps_v6"
 }
 
 variable "system_node_count" {
