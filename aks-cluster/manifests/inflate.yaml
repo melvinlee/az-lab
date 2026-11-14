@@ -1,0 +1,27 @@
+# Scale this up to watch Karpenter (NAP) provision nodes:
+#   kubectl apply -f manifests/inflate.yaml
+#   kubectl scale deploy/inflate --replicas=5
+#   kubectl get nodeclaims -w
+# Scale to 0 (or delete) and Karpenter consolidates the nodes away.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inflate
+spec:
+  replicas: 0
+  selector:
+    matchLabels:
+      app: inflate
+  template:
+    metadata:
+      labels:
+        app: inflate
+    spec:
+      terminationGracePeriodSeconds: 0
+      containers:
+        - name: inflate
+          image: mcr.microsoft.com/oss/kubernetes/pause:3.6
+          resources:
+            requests:
+              cpu: "1"
+              memory: 1.5Gi
