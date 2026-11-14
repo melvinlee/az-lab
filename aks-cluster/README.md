@@ -11,6 +11,7 @@ A Free-tier AKS cluster with **node auto-provisioning (NAP)**, Azure's built-in,
 | System node pool | 1 × `Standard_D2ps_v6` (arm64, Azure Cobalt 100), runs only the cluster's own add-ons |
 | Workload nodes | Provisioned on demand by Karpenter (NAP), capped by the NodePool limits in `karpenter.tf` |
 | Networking | Azure CNI overlay + Cilium dataplane and network policy, Standard Load Balancer |
+| Kubernetes version | Latest GA minor in the region, from the `azurerm_kubernetes_service_versions` data source |
 | Upgrades | `patch` auto-upgrade channel, `NodeImage` node OS upgrades |
 
 ## Prerequisites
@@ -28,6 +29,16 @@ tofu apply tfplan
 $(tofu output -raw get_credentials)
 ```
 
+## Kubernetes version
+
+By default the cluster uses the newest generally available (non-preview) Kubernetes minor version AKS offers in the region. It pins the minor version (for example `1.37`) rather than a patch, so:
+
+- New clusters always start on the latest GA minor.
+- AKS applies patches automatically through the `patch` auto-upgrade channel, without causing OpenTofu drift.
+- When a newer minor becomes GA, the next `tofu plan` shows an in-place upgrade of the control plane and system pool. Karpenter nodes follow the control plane automatically.
+
+To stay on a specific minor, set `kubernetes_version = "1.36"`.
+
 ## Variables
 
 | Name | Default | Description |
@@ -35,7 +46,7 @@ $(tofu output -raw get_credentials)
 | `subscription_id` | `null` | Defaults to the Azure CLI's current subscription |
 | `name` | `aks-lab` | Cluster name; the resource group is `rg-<name>` |
 | `location` | `southeastasia` | Azure region |
-| `kubernetes_version` | `null` | Defaults to the AKS default version |
+| `kubernetes_version` | `null` | Minor version such as `"1.36"`. `null` means the latest GA version in the region, looked up at plan time |
 | `system_node_vm_size` | `Standard_D2ps_v6` | System pool VM size (arm64). Changes rotate the pool in place through `temporary_name_for_rotation` |
 | `system_node_count` | `1` | System pool node count |
 | `tags` | `{ purpose = "az-lab" }` | Tags on all resources |
