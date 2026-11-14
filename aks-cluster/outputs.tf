@@ -10,3 +10,8 @@ output "get_credentials" {
   description = "Command to fetch kubeconfig."
   value       = "az aks get-credentials -g ${azurerm_resource_group.this.name} -n ${azurerm_kubernetes_cluster.this.name} --overwrite-existing"
 }
+
+output "kubernetes_version" {
+  description = "Kubernetes minor version the cluster is pinned to (latest GA unless overridden)."
+  value       = local.kubernetes_version
+}

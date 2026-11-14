@@ -17,7 +17,7 @@ variable "location" {
 }
 
 variable "kubernetes_version" {
-  description = "AKS Kubernetes version. Null = AKS default."
+  description = "AKS Kubernetes minor version (e.g. \"1.36\"). Null = latest GA version in the region."
   type        = string
   default     = null
 }
