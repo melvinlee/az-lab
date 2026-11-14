@@ -24,7 +24,9 @@ resource "azurerm_kubernetes_cluster" "this" {
 
   # System pool for critical add-ons only; Karpenter provisions workload nodes.
   default_node_pool {
-    name                         = "system"
+    name = "system"
+    # Lets vm_size changes rotate the pool in place instead of recreating the cluster.
+    temporary_name_for_rotation  = "systemtmp"
     vm_size                      = var.system_node_vm_size
     node_count                   = var.system_node_count
     only_critical_addons_enabled = true

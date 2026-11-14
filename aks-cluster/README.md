@@ -8,7 +8,7 @@ A Free-tier AKS cluster with **node auto-provisioning (NAP)**, Azure's built-in,
 | --- | --- |
 | Resource group | `rg-aks-lab` (`southeastasia`) |
 | AKS cluster | `aks-lab`, Free control-plane tier, managed identity |
-| System node pool | 1 × `Standard_D2s_v5`, runs only the cluster's own add-ons |
+| System node pool | 1 × `Standard_D2ps_v6` (arm64, Azure Cobalt 100), runs only the cluster's own add-ons |
 | Workload nodes | Provisioned on demand by Karpenter (NAP), capped by the NodePool limits in `karpenter.tf` |
 | Networking | Azure CNI overlay + Cilium dataplane and network policy, Standard Load Balancer |
 | Upgrades | `patch` auto-upgrade channel, `NodeImage` node OS upgrades |
@@ -36,7 +36,7 @@ $(tofu output -raw get_credentials)
 | `name` | `aks-lab` | Cluster name; the resource group is `rg-<name>` |
 | `location` | `southeastasia` | Azure region |
 | `kubernetes_version` | `null` | Defaults to the AKS default version |
-| `system_node_vm_size` | `Standard_D2s_v5` | System pool VM size |
+| `system_node_vm_size` | `Standard_D2ps_v6` | System pool VM size (arm64). Changes rotate the pool in place through `temporary_name_for_rotation` |
 | `system_node_count` | `1` | System pool node count |
 | `tags` | `{ purpose = "az-lab" }` | Tags on all resources |
 | `nap_limits` | general: 8 CPU / 16Gi, system_burst: 4 CPU / 16Gi | Total CPU and memory each Karpenter NodePool may provision |
