@@ -68,7 +68,7 @@ resource "azurerm_kubernetes_cluster" "this" {
   }
 
   # AKS-managed KEDA add-on: operator, metrics API server and admission webhook in kube-system.
-  # The KEDA tests use only cron/metrics-api triggers, so workload identity stays off. (The OIDC
+  # The KEDA tests use only cron triggers, so workload identity stays off. (The OIDC
   # issuer is on regardless: AKS enables it on new 1.34+ clusters and it can't be disabled.)
   workload_autoscaler_profile {
     keda_enabled = true

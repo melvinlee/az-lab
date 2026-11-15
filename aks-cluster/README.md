@@ -86,12 +86,12 @@ kubectl get nodepools -o custom-columns=NAME:.metadata.name,CPU:.spec.limits.cpu
 
 ## KEDA
 
-The AKS-managed KEDA add-on (`workload_autoscaler_profile { keda_enabled = true }`) runs the KEDA operator, metrics API server and admission webhook in `kube-system`. The tests only use triggers that need no Azure resources (cron and metrics-api), so there's nothing extra to create or pay for.
+The AKS-managed KEDA add-on (`workload_autoscaler_profile { keda_enabled = true }`) runs the KEDA operator, metrics API server and admission webhook in `kube-system`. The tests only use cron triggers, which need no Azure resources, so there's nothing extra to create or pay for.
 
 ### Running the tests
 
 ```sh
-kubectl apply -f manifests/inflate.yaml   # target for tests 1, 2 and 4b
+kubectl apply -f manifests/inflate.yaml   # target for tests 1 and 2
 ```
 
 | # | Test | Manifest | Expected |
@@ -99,8 +99,6 @@ kubectl apply -f manifests/inflate.yaml   # target for tests 1, 2 and 4b
 | 0 | Smoke test | none | See below |
 | 1 | Cron scaler | `keda-1-cron.yaml` | `inflate` 0 → 3 at :00/:10/:20…, back to 0 after the 5-minute window; `keda-hpa-inflate-cron` HPA exists |
 | 2 | KEDA + Karpenter | `keda-2-cron-karpenter.yaml` | 10 replicas → 2 NodeClaims, ~6 Running and the rest Pending at the 16Gi cap; after the window, pods → 0 and Karpenter removes the nodes |
-| 3 | ScaledJob | `keda-3-scaledjob.yaml` | Up to 3 Jobs running during each window; at most 3 succeeded / 2 failed Jobs kept |
-| 4 | Negative tests | `keda-4-negative.yaml` | Fallback holds at 2 replicas, paused replicas stay at 1, ScaledObject on an HPA-managed Deployment is rejected |
 
 Each manifest's header has the exact commands. Tests 1 and 2 use the same ScaledObject name, so applying test 2 replaces test 1.
 
