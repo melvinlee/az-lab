@@ -20,6 +20,8 @@ tofu apply tfplan
 tofu destroy
 ```
 
+**Fresh builds of `aks-cluster/` need two stages** (see its README, issue #6): with no cluster in state, the `kubectl` provider can't be configured and the full plan fails. Stage 1: `tofu plan -out=tfplan -target=azurerm_resource_group.this -target=azurerm_kubernetes_cluster.this` and apply. Stage 2: a normal plan and apply for the Karpenter `kubectl_manifest` resources. `depends_on`/waits don't help, because providers are configured at plan time.
+
 AKS operations (node pool rotation, version upgrades) take 8–15 minutes and hold the local state lock; run them in the background and don't start another plan until they finish.
 
 ## Labs
