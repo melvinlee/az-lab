@@ -67,12 +67,6 @@ resource "azurerm_kubernetes_cluster" "this" {
     outbound_type       = "loadBalancer"
   }
 
-  # Workload identity lets the KEDA operator (and test workloads) get Entra tokens via
-  # federated credentials instead of secrets. Enabled in the same update as KEDA; if the
-  # keda-operator pods start before the webhook, restart them (see README, KEDA test 0).
-  oidc_issuer_enabled       = true
-  workload_identity_enabled = true
-
   # AKS-managed KEDA add-on: operator, metrics API server and admission webhook in kube-system.
   workload_autoscaler_profile {
     keda_enabled = true
