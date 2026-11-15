@@ -22,11 +22,37 @@ A Free-tier AKS cluster with **node auto-provisioning (NAP)**, Azure's built-in,
 
 ## Deploy
 
+### Fresh build (no cluster yet): two stages
+
+When the cluster doesn't exist yet (first build, or after `tofu destroy`), a plain `tofu plan` fails with `kubectl provider: configure failed`. The `kubectl` provider that applies the Karpenter NodePools gets its API server address and credentials from the cluster, and those don't exist until the cluster is created. OpenTofu configures providers at the start of plan, so `depends_on` or waits can't help. See issue #6.
+
+Build in two stages:
+
 ```sh
 tofu init
+
+# Stage 1: resource group and cluster only (about 6 minutes)
+tofu plan -out=tfplan -target=azurerm_resource_group.this -target=azurerm_kubernetes_cluster.this
+tofu apply tfplan
+
+# Stage 2: everything else, now that the cluster's credentials are in state
+# (Karpenter NodePools and AKSNodeClasses)
 tofu plan -out=tfplan
 tofu apply tfplan
+
 $(tofu output -raw get_credentials)
+tofu plan        # should show "No changes"
+```
+
+OpenTofu prints a warning about `-target` in stage 1. That's expected.
+
+### Changes to an existing cluster
+
+Once the cluster exists, a single plan and apply covers everything:
+
+```sh
+tofu plan -out=tfplan
+tofu apply tfplan
 ```
 
 ## Kubernetes version
