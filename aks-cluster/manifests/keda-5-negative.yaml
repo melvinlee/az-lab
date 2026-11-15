@@ -1,0 +1,126 @@
+# KEDA test 5: negative tests. Needs keda-3-queue.yaml applied.
+#   eval "$(tofu output -raw keda_env)"
+#   envsubst "$KEDA_SUBST" < manifests/keda-5-negative.yaml | kubectl apply -f -
+#
+# 5a. Missing role: remove the operator's queue role, then watch test 3's ScaledObject fail.
+#     az role assignment delete --assignee "$KEDA_OPERATOR_CLIENT_ID" \
+#       --role "Storage Queue Data Reader" --scope "$(az storage account show -n "$KEDA_STORAGE_ACCOUNT" --query id -o tsv)"
+#     kubectl get scaledobject queue-consumer   # READY=False after a poll or two
+#     kubectl describe scaledobject queue-consumer; kubectl logs -n kube-system deploy/keda-operator | grep -i auth
+#     Restore with: tofu apply (keda.tf recreates the assignment)
+#
+# 5b. Fallback: fallback-demo below points at a queue that doesn't exist; after 3 failed
+#     polls it holds at fallback.replicas (2).   kubectl get deploy fallback-demo -w
+#
+# 5c. Paused replicas: pin test 3's ScaledObject at 1 replica regardless of queue length.
+#     kubectl annotate scaledobject queue-consumer autoscaling.keda.sh/paused-replicas="1"
+#     kubectl annotate scaledobject queue-consumer autoscaling.keda.sh/paused-replicas-   # resume
+#
+# 5d. HPA conflict: hpa-conflict below already has a plain HPA, so the KEDA admission
+#     webhook rejects the ScaledObject `hpa-conflict` with "already autoscaled by ... HPA".
+#     (The webhook validates ScaledObjects only; it doesn't block an HPA created afterwards.)
+#     kubectl apply should fail for that one object; the rest of this file applies.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fallback-demo
+spec:
+  replicas: 0
+  selector:
+    matchLabels:
+      app: fallback-demo
+  template:
+    metadata:
+      labels:
+        app: fallback-demo
+    spec:
+      terminationGracePeriodSeconds: 0
+      containers:
+        - name: pause
+          image: mcr.microsoft.com/oss/kubernetes/pause:3.6
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: fallback-demo
+spec:
+  scaleTargetRef:
+    name: fallback-demo
+  minReplicaCount: 0
+  maxReplicaCount: 5
+  pollingInterval: 10
+  fallback:
+    failureThreshold: 3
+    replicas: 2
+  triggers:
+    - type: azure-queue
+      metadata:
+        accountName: ${KEDA_STORAGE_ACCOUNT}
+        queueName: does-not-exist # broken on purpose
+        queueLength: "5"
+      authenticationRef:
+        name: azure-queue-auth
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hpa-conflict
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hpa-conflict
+  template:
+    metadata:
+      labels:
+        app: hpa-conflict
+    spec:
+      terminationGracePeriodSeconds: 0
+      containers:
+        - name: pause
+          image: mcr.microsoft.com/oss/kubernetes/pause:3.6
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: hpa-conflict
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: hpa-conflict
+  minReplicas: 1
+  maxReplicas: 2
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 80
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: hpa-conflict
+spec:
+  scaleTargetRef:
+    name: hpa-conflict
+  minReplicaCount: 1
+  maxReplicaCount: 3
+  triggers:
+    - type: cron
+      metadata:
+        timezone: Asia/Singapore
+        start: "0 * * * *"
+        end: "30 * * * *"
+        desiredReplicas: "2"

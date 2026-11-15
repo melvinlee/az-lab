@@ -1,0 +1,69 @@
+# KEDA test 3: Azure Storage Queue scaler with workload identity.
+# Render with values from tofu:
+#   eval "$(tofu output -raw keda_env)"
+#   envsubst "$KEDA_SUBST" < manifests/keda-3-queue.yaml | kubectl apply -f -
+# Push 50 messages -> 50 / queueLength 5 = 10 replicas; clear the queue -> 0 after cooldown:
+#   for i in $(seq 50); do az storage message put --auth-mode login \
+#     --account-name "$KEDA_STORAGE_ACCOUNT" -q "$KEDA_SO_QUEUE" --content "m$i" -o none; done
+#   az storage message clear --auth-mode login --account-name "$KEDA_STORAGE_ACCOUNT" -q "$KEDA_SO_QUEUE"
+---
+# The KEDA operator (kube-system/keda-operator) authenticates as this identity through the
+# federated credential in keda.tf. Must be in the same namespace as the ScaledObject.
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: azure-queue-auth
+spec:
+  podIdentity:
+    provider: azure-workload
+    identityId: ${KEDA_OPERATOR_CLIENT_ID}
+---
+# Stand-in consumer: it doesn't read messages, it only gives KEDA something to scale.
+# Small requests so 10 replicas fit on one Karpenter node.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: queue-consumer
+spec:
+  replicas: 0
+  selector:
+    matchLabels:
+      app: queue-consumer
+  template:
+    metadata:
+      labels:
+        app: queue-consumer
+    spec:
+      terminationGracePeriodSeconds: 0
+      containers:
+        - name: pause
+          image: mcr.microsoft.com/oss/kubernetes/pause:3.6
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: queue-consumer
+spec:
+  scaleTargetRef:
+    name: queue-consumer
+  minReplicaCount: 0
+  maxReplicaCount: 10
+  cooldownPeriod: 60
+  pollingInterval: 10
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 60
+  triggers:
+    - type: azure-queue
+      metadata:
+        accountName: ${KEDA_STORAGE_ACCOUNT}
+        queueName: ${KEDA_SO_QUEUE}
+        queueLength: "5"
+      authenticationRef:
+        name: azure-queue-auth
