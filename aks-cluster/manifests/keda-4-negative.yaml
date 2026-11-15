@@ -1,25 +1,20 @@
-# KEDA test 5: negative tests. Needs keda-3-queue.yaml applied.
-#   eval "$(tofu output -raw keda_env)"
-#   envsubst "$KEDA_SUBST" < manifests/keda-5-negative.yaml | kubectl apply -f -
+# KEDA test 4: negative tests.
+#   kubectl apply -f manifests/keda-4-negative.yaml
 #
-# 5a. Missing role: remove the operator's queue role, then watch test 3's ScaledObject fail.
-#     az role assignment delete --assignee "$KEDA_OPERATOR_CLIENT_ID" \
-#       --role "Storage Queue Data Reader" --scope "$(az storage account show -n "$KEDA_STORAGE_ACCOUNT" --query id -o tsv)"
-#     kubectl get scaledobject queue-consumer   # READY=False after a poll or two
-#     kubectl describe scaledobject queue-consumer; kubectl logs -n kube-system deploy/keda-operator | grep -i auth
-#     Restore with: tofu apply (keda.tf recreates the assignment)
+# 4a. Fallback: fallback-demo's trigger polls a metrics endpoint that doesn't exist. After 3
+#     failed polls the ScaledObject goes Ready=False and holds the Deployment at
+#     fallback.replicas (2).
+#     kubectl get deploy fallback-demo -w; kubectl describe scaledobject fallback-demo
 #
-# 5b. Fallback: fallback-demo below points at a queue that doesn't exist; after 3 failed
-#     polls it holds at fallback.replicas (2).   kubectl get deploy fallback-demo -w
+# 4b. Paused replicas: pin test 1/2's ScaledObject at 1 replica regardless of the cron window.
+#     kubectl annotate scaledobject inflate-cron autoscaling.keda.sh/paused-replicas="1"
+#     kubectl get deploy inflate                                                    # stays at 1
+#     kubectl annotate scaledobject inflate-cron autoscaling.keda.sh/paused-replicas-   # resume
 #
-# 5c. Paused replicas: pin test 3's ScaledObject at 1 replica regardless of queue length.
-#     kubectl annotate scaledobject queue-consumer autoscaling.keda.sh/paused-replicas="1"
-#     kubectl annotate scaledobject queue-consumer autoscaling.keda.sh/paused-replicas-   # resume
-#
-# 5d. HPA conflict: hpa-conflict below already has a plain HPA, so the KEDA admission
-#     webhook rejects the ScaledObject `hpa-conflict` with "already autoscaled by ... HPA".
-#     (The webhook validates ScaledObjects only; it doesn't block an HPA created afterwards.)
-#     kubectl apply should fail for that one object; the rest of this file applies.
+# 4c. HPA conflict: hpa-conflict below already has a plain HPA, so the KEDA admission
+#     webhook rejects the ScaledObject `hpa-conflict` ("already autoscaled by ... HPA").
+#     The webhook validates ScaledObjects only; it doesn't block an HPA created afterwards.
+#     kubectl apply reports an error for that one object; the rest of this file applies.
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -58,13 +53,12 @@ spec:
     failureThreshold: 3
     replicas: 2
   triggers:
-    - type: azure-queue
+    # Broken on purpose: no such service. metrics-api uses AverageValue, which fallback requires.
+    - type: metrics-api
       metadata:
-        accountName: ${KEDA_STORAGE_ACCOUNT}
-        queueName: does-not-exist # broken on purpose
-        queueLength: "5"
-      authenticationRef:
-        name: azure-queue-auth
+        url: http://does-not-exist.default.svc.cluster.local:8080/metrics
+        valueLocation: value
+        targetValue: "5"
 ---
 apiVersion: apps/v1
 kind: Deployment

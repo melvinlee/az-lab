@@ -12,8 +12,7 @@ A Free-tier AKS cluster with **node auto-provisioning (NAP)**, Azure's built-in,
 | Workload nodes | Provisioned on demand by Karpenter (NAP), capped by the NodePool limits in `karpenter.tf` |
 | Networking | Azure CNI overlay + Cilium dataplane and network policy, Standard Load Balancer |
 | Kubernetes version | Latest GA minor in the region, from the `azurerm_kubernetes_service_versions` data source |
-| Event-driven autoscaling | AKS-managed KEDA add-on, with OIDC issuer and workload identity |
-| KEDA test resources (`keda.tf`) | Storage account with two queues, two user-assigned identities, role assignments, and federated credentials |
+| Event-driven autoscaling | AKS-managed KEDA add-on |
 | Upgrades | `patch` auto-upgrade channel, `NodeImage` node OS upgrades |
 
 ## Prerequisites
@@ -113,38 +112,23 @@ kubectl get nodepools -o custom-columns=NAME:.metadata.name,CPU:.spec.limits.cpu
 
 ## KEDA
 
-The AKS-managed KEDA add-on (`workload_autoscaler_profile { keda_enabled = true }`) runs the KEDA operator, metrics API server and admission webhook in `kube-system`. Workload identity (`oidc_issuer_enabled`, `workload_identity_enabled`) lets KEDA read Azure queues without secrets.
-
-`keda.tf` creates the Azure side of the tests:
-
-| Resource | Purpose |
-| --- | --- |
-| Storage account + queues `keda-scaledobject`, `keda-scaledjob` | Triggers for tests 3 and 4 |
-| Identity `id-aks-lab-keda-operator` | Used by `kube-system/keda-operator` through a federated credential. **Storage Queue Data Reader** on the account: it only counts messages |
-| Identity `id-aks-lab-keda-worker` | Used by ScaledJob pods (`default/keda-worker`). **Storage Queue Data Message Processor** on the job queue only |
-| Role for you | **Storage Queue Data Contributor**, so you can push and clear test messages with `--auth-mode login` |
-
-The TriggerAuthentication passes the operator identity's client ID as `identityId`, so the AKS-managed `keda-operator` service account doesn't need an annotation.
+The AKS-managed KEDA add-on (`workload_autoscaler_profile { keda_enabled = true }`) runs the KEDA operator, metrics API server and admission webhook in `kube-system`. The tests only use triggers that need no Azure resources (cron and metrics-api), so there's nothing extra to create or pay for.
 
 ### Running the tests
 
-The manifests need values from OpenTofu. Load them, then render with `envsubst "$KEDA_SUBST"`. That substitutes only the `KEDA_*` variables, so the shell variables inside the job script are left alone.
-
 ```sh
-eval "$(tofu output -raw keda_env)"
-kubectl apply -f manifests/inflate.yaml
+kubectl apply -f manifests/inflate.yaml   # target for tests 1, 2 and 4b
 ```
 
 | # | Test | Manifest | Expected |
 | --- | --- | --- | --- |
 | 0 | Smoke test | none | See below |
-| 1 | Cron scaler | `keda-1-cron.yaml` | `inflate` 0 → 3 at :00/:10/:20…, back to 0 after the window; `keda-hpa-inflate-cron` HPA exists |
+| 1 | Cron scaler | `keda-1-cron.yaml` | `inflate` 0 → 3 at :00/:10/:20…, back to 0 after the 5-minute window; `keda-hpa-inflate-cron` HPA exists |
 | 2 | KEDA + Karpenter | `keda-2-cron-karpenter.yaml` | 10 replicas → 2 NodeClaims, ~6 Running and the rest Pending at the 16Gi cap; after the window, pods → 0 and Karpenter removes the nodes |
-| 3 | Azure queue + workload identity | `keda-3-queue.yaml` | 50 messages → 10 replicas (`queueLength: 5`); clear the queue → 0 after cooldown |
-| 4 | ScaledJob | `keda-4-scaledjob.yaml` | One Job per message; at most 3 succeeded / 2 failed Jobs kept |
-| 5 | Negative tests | `keda-5-negative.yaml` | Auth failure, fallback, paused replicas, HPA conflict (steps in the file header) |
+| 3 | ScaledJob | `keda-3-scaledjob.yaml` | Up to 3 Jobs running during each window; at most 3 succeeded / 2 failed Jobs kept |
+| 4 | Negative tests | `keda-4-negative.yaml` | Fallback holds at 2 replicas, paused replicas stay at 1, ScaledObject on an HPA-managed Deployment is rejected |
 
-Each manifest's header has the exact commands. Tests 4 and 5 need test 3's `azure-queue-auth` TriggerAuthentication.
+Each manifest's header has the exact commands. Tests 1 and 2 use the same ScaledObject name, so applying test 2 replaces test 1.
 
 **Test 0, smoke test:**
 
@@ -152,10 +136,7 @@ Each manifest's header has the exact commands. Tests 4 and 5 need test 3's `azur
 az aks show -g rg-aks-lab -n aks-lab --query workloadAutoScalerProfile.keda.enabled   # true
 kubectl get pods -n kube-system -o wide | grep keda       # operator, metrics API server, webhook: Running on the system node
 kubectl get apiservice v1beta1.external.metrics.k8s.io    # AVAILABLE=True
-kubectl describe pod -n kube-system -l app.kubernetes.io/name=keda-operator | grep AZURE_FEDERATED_TOKEN_FILE
 ```
-
-If `AZURE_FEDERATED_TOKEN_FILE` is missing, the operator started before the workload identity webhook. Restart it with `kubectl rollout restart deploy/keda-operator -n kube-system`.
 
 ### How the scale-down timing works
 
@@ -185,5 +166,5 @@ tofu destroy
 - [NAP networking](https://learn.microsoft.com/azure/aks/node-auto-provisioning-networking)
 - [AKSNodeClass configuration](https://learn.microsoft.com/azure/aks/node-auto-provisioning-aksnodeclass)
 - [Karpenter provider for Azure](https://github.com/Azure/karpenter-provider-azure)
-- [KEDA add-on with workload identity](https://learn.microsoft.com/azure/aks/keda-workload-identity)
-- [KEDA Azure Storage Queue scaler](https://keda.sh/docs/latest/scalers/azure-storage-queue/)
+- [KEDA add-on for AKS](https://learn.microsoft.com/azure/aks/keda-about)
+- [KEDA cron scaler](https://keda.sh/docs/latest/scalers/cron/)

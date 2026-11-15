@@ -1,0 +1,35 @@
+# KEDA test 3: ScaledJob. During each cron window KEDA keeps up to 3 Jobs running; each
+# Job sleeps 30s and exits, so new ones keep replacing them until the window ends.
+# History limits keep at most 3 succeeded and 2 failed Jobs; older ones are deleted.
+#   kubectl apply -f manifests/keda-3-scaledjob.yaml
+#   kubectl get scaledjob sleep-job; kubectl get jobs -w
+apiVersion: keda.sh/v1alpha1
+kind: ScaledJob
+metadata:
+  name: sleep-job
+spec:
+  pollingInterval: 15
+  maxReplicaCount: 3
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 2
+  jobTargetRef:
+    backoffLimit: 1
+    template:
+      spec:
+        restartPolicy: Never
+        terminationGracePeriodSeconds: 0
+        containers:
+          - name: worker
+            image: busybox:1.36
+            command: ["sh", "-c", "echo started; sleep 30; echo done"]
+            resources:
+              requests:
+                cpu: 50m
+                memory: 32Mi
+  triggers:
+    - type: cron
+      metadata:
+        timezone: Asia/Singapore
+        start: "*/10 * * * *"
+        end: "5-59/10 * * * *"
+        desiredReplicas: "3"
