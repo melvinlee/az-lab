@@ -1,0 +1,69 @@
+# KEDA test 4: ScaledJob, one Job per queue message. Needs keda-3-queue.yaml applied
+# (for the azure-queue-auth TriggerAuthentication).
+#   eval "$(tofu output -raw keda_env)"
+#   envsubst "$KEDA_SUBST" < manifests/keda-4-scaledjob.yaml | kubectl apply -f -
+#   for i in $(seq 5); do az storage message put --auth-mode login \
+#     --account-name "$KEDA_STORAGE_ACCOUNT" -q "$KEDA_JOB_QUEUE" --content "job$i" -o none; done
+#   kubectl get jobs -w      # 5 Jobs; history limits keep at most 3 succeeded / 2 failed
+---
+# Worker pods use workload identity (keda-worker identity, federated to this SA in keda.tf)
+# to dequeue and delete their message.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: keda-worker
+  annotations:
+    azure.workload.identity/client-id: ${KEDA_WORKER_CLIENT_ID}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledJob
+metadata:
+  name: queue-job
+spec:
+  pollingInterval: 10
+  maxReplicaCount: 10
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 2
+  jobTargetRef:
+    backoffLimit: 1
+    ttlSecondsAfterFinished: 600
+    template:
+      metadata:
+        labels:
+          azure.workload.identity/use: "true"
+      spec:
+        serviceAccountName: keda-worker
+        restartPolicy: Never
+        containers:
+          - name: worker
+            image: mcr.microsoft.com/azure-cli:latest
+            env:
+              - name: ACCOUNT
+                value: ${KEDA_STORAGE_ACCOUNT}
+              - name: QUEUE
+                value: ${KEDA_JOB_QUEUE}
+            command: ["/bin/sh", "-c"]
+            args:
+              - |
+                set -e
+                az login --service-principal -u "$AZURE_CLIENT_ID" -t "$AZURE_TENANT_ID" \
+                  --federated-token "$(cat "$AZURE_FEDERATED_TOKEN_FILE")" --allow-no-subscriptions -o none
+                msg=$(az storage message get --auth-mode login --account-name "$ACCOUNT" -q "$QUEUE" \
+                  --query "[0].[id,popReceipt,content]" -o tsv)
+                [ -z "$msg" ] && { echo "queue empty"; exit 0; }
+                set -- $msg
+                echo "processing $3"; sleep 20
+                az storage message delete --auth-mode login --account-name "$ACCOUNT" -q "$QUEUE" \
+                  --id "$1" --pop-receipt "$2"
+            resources:
+              requests:
+                cpu: 100m
+                memory: 256Mi
+  triggers:
+    - type: azure-queue
+      metadata:
+        accountName: ${KEDA_STORAGE_ACCOUNT}
+        queueName: ${KEDA_JOB_QUEUE}
+        queueLength: "1"
+      authenticationRef:
+        name: azure-queue-auth

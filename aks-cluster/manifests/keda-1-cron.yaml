@@ -1,0 +1,31 @@
+# KEDA test 1: cron scaler on `inflate` (apply manifests/inflate.yaml first).
+# Every 10 minutes: scale 0 -> 3 at :00, :10, :20...; window ends 5 minutes later and,
+# after the HPA scale-down and cooldownPeriod, goes back to 0.
+#   kubectl apply -f manifests/keda-1-cron.yaml
+#   kubectl get scaledobject inflate-cron; kubectl get hpa keda-hpa-inflate-cron
+#   kubectl get deploy inflate -w
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: inflate-cron
+spec:
+  scaleTargetRef:
+    name: inflate
+  minReplicaCount: 0
+  maxReplicaCount: 10
+  # Only governs 1 -> 0. N -> 1 is the KEDA-created HPA's job (see behavior below).
+  cooldownPeriod: 60
+  pollingInterval: 15
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          # Default is 300s; shortened so the lab's full scale-down is quick to observe.
+          stabilizationWindowSeconds: 60
+  triggers:
+    - type: cron
+      metadata:
+        timezone: Asia/Singapore
+        start: "*/10 * * * *"
+        end: "5-59/10 * * * *"
+        desiredReplicas: "3"
