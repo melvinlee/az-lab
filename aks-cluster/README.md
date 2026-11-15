@@ -136,11 +136,63 @@ kubectl get pods -n kube-system -o wide | grep keda       # operator, metrics AP
 kubectl get apiservice v1beta1.external.metrics.k8s.io    # AVAILABLE=True
 ```
 
+When you're done, remove the test. Otherwise the cron trigger keeps scaling up every 10 minutes and Karpenter keeps adding on-demand nodes:
+
+```sh
+kubectl delete scaledobject inflate-cron && kubectl delete deploy inflate
+```
+
 ### How the scale-down timing works
 
-- `cooldownPeriod` only covers the last step, 1 → 0.
-- Scaling N → 1 is done by the HPA that KEDA creates. Its default scale-down stabilization is 300s; the manifests shorten it to 60s under `spec.advanced.horizontalPodAutoscalerConfig.behavior`.
-- Full scale-down is therefore: HPA stabilization → KEDA cooldown → Karpenter consolidation of the empty nodes.
+- **Scale-up** goes through the HPA that KEDA creates. KEDA activates the Deployment (0 → 1), then the HPA's default scale-up policy steps it up. In test 2 it went 0 → 5 → 10 within about 20 seconds.
+- **Scale-down to zero** skips the HPA. When every trigger is inactive and `cooldownPeriod` (60s here) has passed since the trigger was last active, KEDA sets the Deployment straight to `minReplicaCount`. The tests went 3 → 0 and 10 → 0 in one step, about 45s after the window closed.
+- **The HPA's scale-down stabilization** (default 300s; the manifests shorten it to 60s under `spec.advanced.horizontalPodAutoscalerConfig.behavior`) only applies when the replica count drops but stays above 0, for example a queue shrinking from 50 to 10 messages.
+- **Full scale-down to no nodes** is: KEDA cooldown → pods deleted → Karpenter consolidates the empty nodes (about 45s per node here).
+
+### Test results
+
+Run on 2026-11-15 against Kubernetes 1.37.0, with the `general` NodePool pinned to `Standard_D4ls_v5` / `Standard_D4als_v6` and limited to 8 CPU / 16Gi. Times are SGT.
+
+| # | Test | Result |
+| --- | --- | --- |
+| 0 | Smoke test | ✅ Pass |
+| 1 | Cron scaler | ✅ Pass |
+| 2 | KEDA + Karpenter | ✅ Pass |
+
+**Test 0, smoke test**
+
+- `workloadAutoScalerProfile.keda.enabled` was `true`.
+- `keda-operator`, `keda-operator-metrics-apiserver` and `keda-admission-webhooks` were all Running, 2 replicas each, on the arm64 system node.
+- `v1beta1.external.metrics.k8s.io` was `Available=True`, and 6 KEDA CRDs were installed.
+- Each `keda-operator` replica restarted 3 times on first start (`secrets "kedaorg-certs" already exists`): both replicas raced to create the certificate secret. This is harmless; there were no errors afterwards.
+
+**Test 1, cron scaler** (`desiredReplicas: 3`)
+
+| Time | Event | Elapsed |
+| --- | --- | --- |
+| 11:10:12 | Window opens: 0 → 3 replicas, pods Pending, NodeClaim created | +12s |
+| 11:10:35 | Karpenter picks `Standard_D4ls_v5` (on-demand: no spot capacity) | +35s |
+| 11:12:16 | Node Ready, 3/3 Running | +2m16s |
+| 11:15:04 | Window closes, ScaledObject `Active=False` | — |
+| 11:15:49 | 3 → 0 replicas in one step | +45s after close |
+| 11:16:34 | Karpenter removes the empty node | +1m30s after close |
+
+The `keda-hpa-inflate-cron` HPA was created.
+
+**Test 2, KEDA + Karpenter** (`desiredReplicas: 10`)
+
+| Time | Event | Elapsed |
+| --- | --- | --- |
+| 11:30:09 | Window opens: HPA scales 0 → 5, NodeClaim 1 created | +9s |
+| 11:30:20 | HPA scales 5 → 10, NodeClaim 2 created; both `Standard_D4ls_v5`, on-demand | +20s |
+| 11:31:26 | Node 1 Ready: 3 Running, 7 Pending | +1m26s |
+| 11:32:10 | Node 2 Ready: 6 Running, 4 Pending; Karpenter reports `all available instance types exceed limits for nodepool (NodePool=general)` | +2m10s |
+| 11:35:07 | Window closes | — |
+| 11:35:51 | 10 → 0 replicas in one step | +44s after close |
+| 11:36:35 | Karpenter removes node 1 | +1m28s after close |
+| 11:37:07 | Karpenter removes node 2: no workload nodes left | +2m after close |
+
+The 16Gi limit held: two 8 GiB nodes and no third NodeClaim, even with 10 replicas requested. Spot capacity for the pinned sizes was unavailable in both tests, so every node fell back to on-demand.
 
 ## NAP constraints
 
