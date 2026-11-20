@@ -23,7 +23,7 @@ variable "vm_size" {
 }
 
 variable "admin_username" {
-  description = "Admin user on the VM. Hermes is installed and runs as this user."
+  description = "Admin user on the VM. Owns ~/.hermes (the container's data volume); the container's hermes user is remapped to its UID/GID."
   type        = string
   default     = "azureuser"
 }
@@ -41,9 +41,17 @@ variable "ssh_allowed_cidr" {
 }
 
 variable "os_disk_size_gb" {
-  description = "OS disk size. Hermes pulls Python, Node and tool runtimes, so the image default is tight."
+  description = "OS disk size. Holds the Hermes image (1.1 GB compressed, several GB unpacked), the previous image for rollback, and ~/.hermes."
   type        = number
   default     = 64
+}
+
+# Pinned by the multi-arch index digest (linux/amd64 + linux/arm64), so a re-pushed tag
+# can't change what runs; the tag is kept for readability. Docker uses the digest.
+variable "hermes_image" {
+  description = "Hermes Agent container image (initial value of HERMES_IMAGE in /etc/hermes/hermes.env). Changing it replaces the VM."
+  type        = string
+  default     = "docker.io/nousresearch/hermes-agent:v0.23.3@sha256:3e9fe4c6ef36490f43aa0d0d80f9df64e9c92a576eee3042f1a97c8813c05355"
 }
 
 variable "tags" {

@@ -42,10 +42,14 @@ AKS Free tier with node auto-provisioning (NAP, AKS-managed Karpenter). NAP cons
 
 ### `ai-agent/`
 
-Single arm64 VM (`Standard_D2ps_v5`, Azure Linux 3 `azure-linux-3-arm64` Gen2) with Hermes Agent installed by `cloud-init.yaml` (rendered by `templatefile`, so shell `${...}` must be escaped as `$${...}`).
+Single arm64 VM (`Standard_D2ps_v5`, Azure Linux 3 `azure-linux-3-arm64` Gen2) running Hermes Agent as a **container** from the official multi-arch image (`var.hermes_image`, `nousresearch/hermes-agent` pinned by tag + index digest). `cloud-init.yaml` is rendered by `templatefile`, so shell/systemd `${...}` must be escaped as `$${...}`.
 
 - **SSH locked to the caller's IP**: `data.http` reads `api.ipify.org` at plan time unless `ssh_allowed_cidr` is set; a new IP shows up as an NSG rule change.
-- **Hermes runs from our own system unit** (`hermes-gateway.service`, `ExecStart=bash -lc 'exec hermes gateway'` so `~/.local/bin` is on PATH), not `hermes gateway install`, which defaults to a user service that needs linger. `ConditionPathExists` on `~/.hermes/.env` keeps it inactive until a provider key is configured.
+- **Docker, not Podman**: `moby-engine` + `docker-cli` are in Azure Linux 3's default `base` repo; `podman` is only in the non-default `extended` repo. No Hermes runtimes (Python, Node, uv) on the host.
+- **`hermes-gateway.service`** wraps `docker run --rm --name hermes ... gateway run` (foreground, `Restart=on-failure`). The image ref and `HERMES_UID`/`HERMES_GID` live in `/etc/hermes/hermes.env`, read by both the unit and `docker run --env-file`. `~/.hermes` is mounted at `/opt/data` (`HERMES_HOME`). `ConditionPathExists` on `~/.hermes/.env` keeps it inactive until a provider key is configured.
+- **Keep the image entrypoint**: s6-overlay `/init` must be PID 1; it remaps the `hermes` user to the admin user's UID and drops to it. No `--init`, `--privileged`, socket mount or published ports.
+- **`/usr/local/bin/hermes`** wrapper runs the CLI via `docker exec` (gateway running) or a throwaway `docker run` (not running), so `hermes setup` works on the host.
+- **Upgrades happen on the VM** (edit `HERMES_IMAGE`, restart the unit). Changing `hermes_image` in OpenTofu changes `custom_data`, which replaces the VM and loses `~/.hermes` on the OS disk.
 - **No secrets in OpenTofu**: API keys go into `~/.hermes/.env` on the VM by hand, because `custom_data` lands in state.
 - `custom_data` changes replace the VM; cloud-init only runs on first boot.
 

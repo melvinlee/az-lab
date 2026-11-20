@@ -86,10 +86,12 @@ resource "azurerm_linux_virtual_machine" "this" {
   network_interface_ids           = [azurerm_network_interface.vm.id]
   tags                            = var.tags
 
-  # cloud-init installs Hermes on first boot. Changing the template only affects new VMs
-  # (custom_data forces a replacement), which is fine for a lab.
+  # cloud-init installs Docker and the Hermes container unit on first boot. Changing the
+  # template or hermes_image only affects new VMs (custom_data forces a replacement, which
+  # also discards ~/.hermes on the OS disk); upgrade the image in place on the VM instead.
   custom_data = base64encode(templatefile("${path.module}/cloud-init.yaml", {
     admin_username = var.admin_username
+    hermes_image   = var.hermes_image
   }))
 
   admin_ssh_key {
