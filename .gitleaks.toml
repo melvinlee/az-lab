@@ -1,0 +1,4 @@
+# Default gitleaks rules. No path allowlist: the hook scans only staged changes, and
+# tfstate, tfplan and .terraform/ are gitignored, so they never reach a scan.
+[extend]
+useDefault = true
