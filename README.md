@@ -34,6 +34,17 @@ tofu apply tfplan
 tofu destroy
 ```
 
+## Secret scanning
+
+A [gitleaks](https://github.com/gitleaks/gitleaks) pre-commit hook (`.githooks/pre-commit`, rules in `.gitleaks.toml`) blocks commits whose staged changes contain secrets. Set it up once per clone:
+
+```sh
+brew install gitleaks
+git config core.hooksPath .githooks
+```
+
+For a false positive, add a `gitleaks:allow` comment on the line, or bypass the hook once with `SKIP=gitleaks git commit ...` or `git commit --no-verify`.
+
 ## Cost
 
 These labs create real, billable Azure resources. Check each lab's README for what it costs, and destroy labs you aren't using. Some resources can't be stopped: for example, an AKS cluster with node auto-provisioning has to be destroyed to stop billing.

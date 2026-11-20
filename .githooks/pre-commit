@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Block commits that add secrets. Activate once per clone:
+#   git config core.hooksPath .githooks
+# Bypass (false positives only): SKIP=gitleaks git commit ...  or  git commit --no-verify
+set -euo pipefail
+
+if [[ ",${SKIP:-}," == *",gitleaks,"* ]]; then
+  echo "gitleaks: skipped (SKIP=gitleaks)" >&2
+  exit 0
+fi
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "gitleaks: not installed, so the secret scan can't run. Install it with 'brew install gitleaks'," >&2
+  echo "or bypass this once with SKIP=gitleaks / git commit --no-verify." >&2
+  exit 1
+fi
+
+# Only the staged diff is scanned: gitignored files (tfstate, tfplan, .terraform/) never reach a commit.
+if ! gitleaks git --pre-commit --staged --redact --verbose --no-banner; then
+  echo >&2
+  echo "gitleaks: possible secret in staged changes; commit blocked." >&2
+  echo "Remove it. For a false positive, add a 'gitleaks:allow' comment or bypass with SKIP=gitleaks / git commit --no-verify." >&2
+  exit 1
+fi
