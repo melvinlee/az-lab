@@ -1,6 +1,6 @@
 # ai-agent
 
-A single arm64 VM running **Azure Linux 3**, with [Hermes Agent](https://github.com/NousResearch/hermes-agent) installed by cloud-init on first boot, deployed with OpenTofu.
+A single arm64 VM running **Azure Linux 3**, running [Hermes Agent](https://github.com/NousResearch/hermes-agent) as a **container** (the official multi-arch image), set up by cloud-init on first boot and deployed with OpenTofu.
 
 ## What gets created
 
@@ -11,7 +11,7 @@ A single arm64 VM running **Azure Linux 3**, with [Hermes Agent](https://github.
 | Image | `MicrosoftCBLMariner:azure-linux-3:azure-linux-3-arm64:latest` (Gen2) |
 | Networking | VNet `10.20.0.0/16`, Standard static public IP, NSG allowing SSH **only from your current IP** |
 | Access | SSH key only (`~/.ssh/id_ed25519.pub` by default), password auth disabled |
-| Boot | cloud-init installs Hermes as `azureuser` and registers `hermes-gateway.service` |
+| Boot | cloud-init installs Docker (`moby-engine`), pulls the Hermes image and registers `hermes-gateway.service` |
 
 ## Deploy
 
@@ -27,13 +27,27 @@ The SSH source IP is looked up from `api.ipify.org` at plan time. If your IP cha
 
 ## What happens at boot
 
-1. `tdnf` installs `git`, `curl`, `tar`, `ca-certificates`, `libatomic` (the Hermes installer doesn't use a distro package manager, so these must exist first).
-2. The Hermes installer runs as `azureuser` from the stable channel with `--non-interactive --skip-browser --skip-computer-use` (headless VM, no Chromium). Output: `/var/log/hermes-install.log`; Hermes lives in `~/.hermes`.
-3. `hermes-gateway.service` (a system unit, so it starts at boot without user lingering) is enabled. It has `ConditionPathExists=~/.hermes/.env`, so it stays inactive instead of crash-looping until you configure a provider.
+1. `tdnf` installs `moby-engine` and `docker-cli` from Azure Linux's default `base` repo. Nothing else Hermes needs (Python, Node, uv, git) is installed on the host: it's all in the image.
+2. `/etc/hermes/hermes.env` gets `HERMES_IMAGE` (from `var.hermes_image`, pinned by digest) and `HERMES_UID`/`HERMES_GID` (`azureuser`'s IDs). `~/.hermes` is created as the container's data volume (`/opt/data`, its `HERMES_HOME`).
+3. The image is pre-pulled (log: `/var/log/hermes-pull.log`).
+4. `hermes-gateway.service` is enabled. It runs `docker run --rm --name hermes ... gateway run` in the foreground with `Restart=on-failure`, and has `ConditionPathExists=~/.hermes/.env`, so it stays inactive instead of crash-looping until you configure a provider.
 
 API keys are deliberately **not** passed through OpenTofu: `custom_data` is stored in state and on the VM.
 
+### Why Docker and this image
+
+- **Image:** NousResearch publishes `nousresearch/hermes-agent` on Docker Hub as a multi-arch index (`linux/amd64`, `linux/arm64`), with versioned tags (`v0.23.3`) and `stable`/`latest`. We pin a version tag plus its index digest.
+- **Runtime:** on Azure Linux 3, `moby-engine` (25.0) and `docker-cli` are in the default `base` repo. `podman` (5.6) exists only in the `extended` repo, which isn't enabled by default. Hermes's own docs and compose file target Docker.
+
+### Container security
+
+- The image's s6-overlay `/init` runs as PID 1 and as root only to remap its `hermes` user to `HERMES_UID` and fix volume ownership. It then runs the gateway (and anything `docker exec ... hermes` starts) as that non-root user. Don't override the entrypoint or add `--init`: that drops s6 supervision and zombie reaping.
+- No `--privileged`, no Docker socket mount, no published ports, default bridge network. The gateway only makes outbound connections; its API server stays off.
+- The agent's terminal tool runs commands **inside the container** as the `hermes` user, so it sees the image and `/opt/data`, not the host. The Docker terminal backend isn't available (no socket). Browser tools would need `--shm-size=1g`; this lab doesn't use them.
+
 ## Configure Hermes (after first boot)
+
+`/usr/local/bin/hermes` is a small wrapper: it runs the CLI inside the running `hermes` container (`docker exec`), or in a throwaway container on the same volume when the gateway isn't running. Either way it acts on `~/.hermes`.
 
 ```sh
 ssh azureuser@<public_ip>
@@ -44,15 +58,45 @@ hermes gateway setup                # optional: Telegram/Discord/etc.
 sudo systemctl start hermes-gateway
 ```
 
+Without the wrapper, the same thing is:
+
+```sh
+. /etc/hermes/hermes.env
+sudo docker run --rm -it --env-file /etc/hermes/hermes.env -v ~/.hermes:/opt/data "$HERMES_IMAGE" setup
+```
+
+## Logs
+
+```sh
+journalctl -u hermes-gateway -f          # unit + container output
+sudo docker logs -f hermes               # container output (rotated, 3 x 10 MB)
+tail -F ~/.hermes/logs/gateways/default/current   # Hermes's own gateway log
+```
+
+## Upgrade and roll back
+
+Edit the image on the VM and restart. Config, `.env`, memory and sessions in `~/.hermes` are kept, and the container runs Hermes's config migrations on start (with backups next to `config.yaml` and `.env`).
+
+```sh
+sudo sed -i 's|^HERMES_IMAGE=.*|HERMES_IMAGE=docker.io/nousresearch/hermes-agent:<new-version>|' /etc/hermes/hermes.env
+sudo systemctl restart hermes-gateway    # ExecStartPre pulls the new image
+# roll back: put the previous value back and restart again
+sudo docker image prune                  # later, to drop unused old images
+```
+
+Also update `hermes_image` in OpenTofu so a rebuilt VM starts on the same version. Changing that variable on its own **replaces the VM** (it's in `custom_data`) and discards `~/.hermes` with the old OS disk, so copy `~/.hermes` off first if you go that way.
+
 ## Verify
 
 ```sh
 uname -m                                 # aarch64
 cat /etc/os-release | head -2            # Azure Linux 3.0
 cloud-init status --long                 # status: done, no errors
-hermes doctor
+sudo docker image inspect -f '{{.Architecture}}' "$(. /etc/hermes/hermes.env; echo $HERMES_IMAGE)"   # arm64
 systemctl status hermes-gateway          # active (running) once .env exists
-sudo reboot                              # then check the service again
+sudo docker ps                           # hermes container Up
+hermes doctor
+sudo reboot                              # then check the service, container and ~/.hermes again
 ```
 
 ## Variables
@@ -62,10 +106,11 @@ sudo reboot                              # then check the service again
 | `name` | `ai-agent` | Resource group is `rg-<name>` |
 | `location` | `southeastasia` | |
 | `vm_size` | `Standard_D2ps_v5` | Must be an Arm64 size |
-| `admin_username` | `azureuser` | Hermes runs as this user |
+| `admin_username` | `azureuser` | Owns `~/.hermes`; the container's `hermes` user is remapped to its UID/GID |
+| `hermes_image` | `docker.io/nousresearch/hermes-agent:v0.23.3@sha256:3e9f…` | Initial `HERMES_IMAGE`; changing it replaces the VM |
 | `ssh_public_key_path` | `~/.ssh/id_ed25519.pub` | |
 | `ssh_allowed_cidr` | `null` (your IP /32) | |
-| `os_disk_size_gb` | `64` | |
+| `os_disk_size_gb` | `64` | Room for the image, a rollback image and `~/.hermes` |
 
 ## Cost
 
@@ -78,5 +123,6 @@ tofu destroy
 ## Notes
 
 - `custom_data` changes force a VM replacement (cloud-init only runs on first boot).
-- The Hermes installer doesn't list Azure Linux explicitly; it supports linux-arm64 (glibc) and needs only git and curl. If boot install fails, check `/var/log/hermes-install.log` and `~/.hermes/logs/install.log`.
+- If the image pull at boot fails, check `/var/log/hermes-pull.log`; the unit pulls again on start anyway.
+- Never run two gateway containers on the same `~/.hermes` (Hermes's session and memory stores aren't built for concurrent writers).
 - The gateway denies all users until they are allowlisted or paired (Hermes default).

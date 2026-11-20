@@ -1,51 +1,87 @@
 #cloud-config
-# Installs Hermes Agent (NousResearch/hermes-agent) as ${admin_username} and registers a
-# systemd unit for the gateway. Secrets are NOT baked in here: custom_data lands in state
-# and on the VM, so API keys go into ~/.hermes/.env by hand after first boot.
+# Runs Hermes Agent (NousResearch/hermes-agent) as a container under a systemd unit.
+# Nothing Hermes-specific is installed on the host: the image carries Python, Node and the
+# tool runtimes. Secrets are NOT baked in here: custom_data lands in state and on the VM,
+# so API keys go into ~/.hermes/.env by hand after first boot.
 
 package_update: true
 packages:
-  # The Hermes installer needs git + curl and doesn't use a distro package manager,
-  # so install them with tdnf up front. libatomic is needed by the Node runtime it downloads.
-  - git
-  - curl
-  - tar
-  - ca-certificates
-  - libatomic
+  # Docker rather than Podman: moby-engine and docker-cli are in Azure Linux 3's default
+  # `base` repo, while podman is only in the `extended` repo (not enabled by default).
+  - moby-engine
+  - docker-cli
 
 write_files:
-  # Our own system unit rather than `hermes gateway install`: that defaults to a user
-  # service (needs linger) and is interactive in the installer. This one runs at boot.
+  # Single source of truth for the image ref, read by the unit (EnvironmentFile) and passed
+  # into the container (--env-file). Upgrade/rollback in place by editing HERMES_IMAGE and
+  # restarting the unit; changing var.hermes_image in OpenTofu replaces the whole VM.
+  # runcmd appends HERMES_UID/HERMES_GID once the admin user exists.
+  - path: /etc/hermes/hermes.env
+    permissions: "0644"
+    content: |
+      HERMES_IMAGE=${hermes_image}
+
+  # Our own system unit around `docker run` (not --restart policies), so boot ordering, the
+  # .env condition and logs (journalctl) work like any other service.
   - path: /etc/systemd/system/hermes-gateway.service
     permissions: "0644"
     content: |
       [Unit]
-      Description=Hermes Agent gateway
-      After=network-online.target
+      Description=Hermes Agent gateway (container)
+      After=docker.service network-online.target
+      Requires=docker.service
       Wants=network-online.target
       # Stay inactive (not crash-looping) until a provider key has been configured.
       ConditionPathExists=/home/${admin_username}/.hermes/.env
 
       [Service]
       Type=simple
-      User=${admin_username}
-      WorkingDirectory=/home/${admin_username}
-      # Login shell so PATH includes ~/.local/bin, where the installer puts `hermes`.
-      ExecStart=/bin/bash -lc 'exec hermes gateway'
+      EnvironmentFile=/etc/hermes/hermes.env
+      # A 1+ GB pull on first start or after an image change outlasts the 90s default.
+      TimeoutStartSec=15min
+      ExecStartPre=-/usr/bin/docker rm -f hermes
+      ExecStartPre=/usr/bin/docker pull $${HERMES_IMAGE}
+      # Keep the image's entrypoint: s6-overlay's /init must be PID 1. It starts as root only
+      # to remap the `hermes` user to HERMES_UID and fix volume ownership, then runs the
+      # gateway as that non-root user. Default bridge network and no published ports: the
+      # gateway only makes outbound connections (the API server stays off). No --privileged
+      # and no Docker socket mount, so the agent can't reach the host's container runtime.
+      ExecStart=/usr/bin/docker run --rm --name hermes \
+        --env-file /etc/hermes/hermes.env \
+        -v /home/${admin_username}/.hermes:/opt/data \
+        --log-opt max-size=10m --log-opt max-file=3 \
+        $${HERMES_IMAGE} gateway run
+      ExecStop=/usr/bin/docker stop -t 30 hermes
       Restart=on-failure
       RestartSec=10
-      KillMode=mixed
-      KillSignal=SIGTERM
 
       [Install]
       WantedBy=multi-user.target
 
+  # `hermes <args>` on the host: runs the CLI in the running gateway container if there is
+  # one (the image's exec shim drops to the hermes user), otherwise in a throwaway container
+  # on the same volume, e.g. for `hermes setup` before the gateway has ever started.
+  - path: /usr/local/bin/hermes
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+      . /etc/hermes/hermes.env
+      tty=-i; [ -t 0 ] && tty=-it
+      if sudo docker container inspect -f '{{.State.Running}}' hermes 2>/dev/null | grep -q true; then
+        exec sudo docker exec $tty hermes hermes "$@"
+      fi
+      exec sudo docker run --rm $tty --env-file /etc/hermes/hermes.env \
+        -v /home/${admin_username}/.hermes:/opt/data "$HERMES_IMAGE" "$@"
+
 runcmd:
-  # Non-interactive install from the stable channel. Browser / computer-use tooling is
-  # skipped: this is a headless VM and those pull in Chromium.
-  - >-
-    sudo -iu ${admin_username} bash -c
-    'curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --non-interactive --skip-browser --skip-computer-use'
-    > /var/log/hermes-install.log 2>&1
+  # Match the container's hermes user to the admin user, so files in ~/.hermes stay owned by
+  # (and editable as) that user on the host.
+  - echo "HERMES_UID=$(id -u ${admin_username})" >> /etc/hermes/hermes.env
+  - echo "HERMES_GID=$(id -g ${admin_username})" >> /etc/hermes/hermes.env
+  - install -d -m 0700 -o ${admin_username} -g ${admin_username} /home/${admin_username}/.hermes
+  - systemctl enable --now docker.service
+  # Pre-pull so the first `hermes setup` doesn't wait on a 1+ GB download.
+  - . /etc/hermes/hermes.env && docker pull "$HERMES_IMAGE" > /var/log/hermes-pull.log 2>&1
   - systemctl daemon-reload
   - systemctl enable hermes-gateway.service
