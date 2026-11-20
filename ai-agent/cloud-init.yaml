@@ -1,0 +1,51 @@
+#cloud-config
+# Installs Hermes Agent (NousResearch/hermes-agent) as ${admin_username} and registers a
+# systemd unit for the gateway. Secrets are NOT baked in here: custom_data lands in state
+# and on the VM, so API keys go into ~/.hermes/.env by hand after first boot.
+
+package_update: true
+packages:
+  # The Hermes installer needs git + curl and doesn't use a distro package manager,
+  # so install them with tdnf up front. libatomic is needed by the Node runtime it downloads.
+  - git
+  - curl
+  - tar
+  - ca-certificates
+  - libatomic
+
+write_files:
+  # Our own system unit rather than `hermes gateway install`: that defaults to a user
+  # service (needs linger) and is interactive in the installer. This one runs at boot.
+  - path: /etc/systemd/system/hermes-gateway.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Hermes Agent gateway
+      After=network-online.target
+      Wants=network-online.target
+      # Stay inactive (not crash-looping) until a provider key has been configured.
+      ConditionPathExists=/home/${admin_username}/.hermes/.env
+
+      [Service]
+      Type=simple
+      User=${admin_username}
+      WorkingDirectory=/home/${admin_username}
+      # Login shell so PATH includes ~/.local/bin, where the installer puts `hermes`.
+      ExecStart=/bin/bash -lc 'exec hermes gateway'
+      Restart=on-failure
+      RestartSec=10
+      KillMode=mixed
+      KillSignal=SIGTERM
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  # Non-interactive install from the stable channel. Browser / computer-use tooling is
+  # skipped: this is a headless VM and those pull in Chromium.
+  - >-
+    sudo -iu ${admin_username} bash -c
+    'curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --non-interactive --skip-browser --skip-computer-use'
+    > /var/log/hermes-install.log 2>&1
+  - systemctl daemon-reload
+  - systemctl enable hermes-gateway.service
