@@ -40,6 +40,15 @@ AKS Free tier with node auto-provisioning (NAP, AKS-managed Karpenter). NAP cons
 - **KEDA** is the AKS-managed add-on (`workload_autoscaler_profile` in `main.tf`). Workload identity is deliberately off. The OIDC issuer isn't set in code but is on anyway: AKS enables it on every new 1.34+ cluster and it can't be disabled, so the plan shows `oidc_issuer_enabled = true`. The tests in `manifests/keda-*.yaml` use only cron triggers, so KEDA needs no Azure resources. Tests 1 and 2 share the ScaledObject name `inflate-cron` (2 replaces 1). Scale-to-zero skips the HPA: KEDA sets replicas straight to 0 once `cooldownPeriod` passes after the last active poll (verified in the README's test results), so the HPA scale-down stabilization only matters for N → M > 0.
 - **Scale test:** `kubectl apply -f manifests/inflate.yaml && kubectl scale deploy/inflate --replicas=10`, then `kubectl get nodeclaims -o wide` (stuck launches show the reason in the NodeClaim's `Launched` condition). Expect about 6 Running and the rest Pending at the 16Gi cap. Scale back to 0 afterwards; Karpenter removes empty nodes.
 
+### `ai-agent/`
+
+Single arm64 VM (`Standard_D2ps_v5`, Azure Linux 3 `azure-linux-3-arm64` Gen2) with Hermes Agent installed by `cloud-init.yaml` (rendered by `templatefile`, so shell `${...}` must be escaped as `$${...}`).
+
+- **SSH locked to the caller's IP**: `data.http` reads `api.ipify.org` at plan time unless `ssh_allowed_cidr` is set; a new IP shows up as an NSG rule change.
+- **Hermes runs from our own system unit** (`hermes-gateway.service`, `ExecStart=bash -lc 'exec hermes gateway'` so `~/.local/bin` is on PATH), not `hermes gateway install`, which defaults to a user service that needs linger. `ConditionPathExists` on `~/.hermes/.env` keeps it inactive until a provider key is configured.
+- **No secrets in OpenTofu**: API keys go into `~/.hermes/.env` on the VM by hand, because `custom_data` lands in state.
+- `custom_data` changes replace the VM; cloud-init only runs on first boot.
+
 ## Working in this repo
 
 - Azure resources cost money. When creating a lab, include a clear teardown path (e.g. a single resource group per lab that can be deleted).

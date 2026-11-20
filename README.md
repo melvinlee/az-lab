@@ -7,6 +7,7 @@ My Azure labs, aka playground: experiments, prototypes and learning exercises on
 | Lab | What it builds |
 | --- | --- |
 | [`aks-cluster/`](aks-cluster/) | Free-tier AKS cluster with node auto-provisioning (Azure-managed Karpenter): arm64 system node, spot-first Karpenter NodePools with CPU and memory caps, latest GA Kubernetes |
+| [`ai-agent/`](ai-agent/) | arm64 VM (`Standard_D2ps_v5`) on Azure Linux 3 with Hermes Agent installed by cloud-init at first boot |
 
 ## How labs are organized
 
