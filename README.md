@@ -45,6 +45,14 @@ git config core.hooksPath .githooks
 
 For a false positive, add a `gitleaks:allow` comment on the line, or bypass the hook once with `SKIP=gitleaks git commit ...` or `git commit --no-verify`.
 
+A [TruffleHog](https://github.com/trufflesecurity/trufflehog) pre-push hook (`.githooks/pre-push`) scans the commits being pushed and blocks the push if a secret is **verified** live against its provider (or can't be verified). It's the second line of defence: it catches real credentials that got past gitleaks, e.g. in a `--no-verify` commit. Unverified pattern matches don't block, since gitleaks already covers those. Verification sends candidate secrets to their provider's API (e.g. AWS STS).
+
+```sh
+brew install trufflehog
+```
+
+Same `core.hooksPath` setup. If a push is blocked, rotate the credential first, then rewrite the commit. Bypass a false positive with `SKIP=trufflehog git push ...` or `git push --no-verify`.
+
 ## Cost
 
 These labs create real, billable Azure resources. Check each lab's README for what it costs, and destroy labs you aren't using. Some resources can't be stopped: for example, an AKS cluster with node auto-provisioning has to be destroyed to stop billing.

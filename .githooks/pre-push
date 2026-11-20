@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Block pushes whose new commits contain live (verified) secrets. Activate once per clone:
+#   git config core.hooksPath .githooks
+# Complements the gitleaks pre-commit hook: gitleaks pattern-matches each commit offline;
+# TruffleHog checks candidates against the provider's API, so it catches real, working
+# credentials that slipped past (e.g. a commit made with --no-verify).
+# Bypass (false positives only): SKIP=trufflehog git push ...  or  git push --no-verify
+set -euo pipefail
+
+if [[ ",${SKIP:-}," == *",trufflehog,"* ]]; then
+  echo "trufflehog: skipped (SKIP=trufflehog)" >&2
+  exit 0
+fi
+
+if ! command -v trufflehog >/dev/null 2>&1; then
+  echo "trufflehog: not installed, so the secret scan can't run. Install it with 'brew install trufflehog'," >&2
+  echo "or bypass this once with SKIP=trufflehog / git push --no-verify." >&2
+  exit 1
+fi
+
+zero=0000000000000000000000000000000000000000
+remote="${1:-origin}"
+status=0
+
+# git feeds one line per ref being pushed: <local ref> <local sha> <remote ref> <remote sha>
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [[ "$local_sha" == "$zero" ]] && continue # branch deletion: nothing to scan
+
+  if [[ "$remote_sha" != "$zero" ]] && git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
+    base="$remote_sha" # existing branch: only the commits being added
+  else
+    # New branch: scan from where it forked off the remote's default branch, not all history.
+    base="$(git merge-base "$local_sha" "refs/remotes/$remote/HEAD" 2>/dev/null ||
+      git merge-base "$local_sha" "refs/remotes/$remote/main" 2>/dev/null || true)"
+  fi
+  [[ "$base" == "$local_sha" ]] && continue # no new commits
+
+  args=(git "file://$(git rev-parse --show-toplevel)" --branch "$local_sha"
+    --results=verified,unknown --fail --no-update)
+  [[ -n "$base" ]] && args+=(--since-commit "$base")
+
+  echo "trufflehog: scanning commits for $remote_ref ..." >&2
+  rc=0
+  trufflehog "${args[@]}" || rc=$?
+  if [[ $rc -eq 183 ]]; then
+    echo >&2
+    echo "trufflehog: verified or unverifiable secret in commits for $remote_ref; push blocked." >&2
+    echo "Rotate the credential, then rewrite the commit. False positive: SKIP=trufflehog / git push --no-verify." >&2
+    status=1
+  elif [[ $rc -ne 0 ]]; then
+    echo "trufflehog: scan failed (exit $rc); push blocked. Bypass once with SKIP=trufflehog if needed." >&2
+    status=1
+  fi
+done
+
+exit "$status"
